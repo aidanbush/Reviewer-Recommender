@@ -1,0 +1,82 @@
+\documentclass[conference]{ieee/IEEEtran}
+
+\usepackage[style=ieee,backend=biber,sorting=none]{biblatex}
+\addbibresource{references.bib}
+
+% \IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+%\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\usepackage{paralist}
+
+\begin{document}
+
+\title{Reviewer Recommender With Code Analysis Using Ownership and Knowledge}
+\author{\IEEEauthorblockN{Aidan D. Bush}
+  \IEEEauthorblockA{Department of Computing Science\\
+    University of Alberta\\
+    Edmonton, Alberta Canada\\
+    Email: bush1@ualberta.ca}}
+
+\maketitle
+
+\section{Problem Statement}
+Most large projects involving multiple developers conduct code reviews on all changes before they are merged into the main project.
+These reviews help to validate code quality and check for defects.
+These reviews are integral to the modern development process and must be performed efficiently and to high standards.
+Defects in software cost tens of billions yearly leading to the importance of code reviews \cite{brown18}.
+One problem with conducting code reviews is the assignment of reviewers.
+If reviews are not done correctly they can result in many different reviewers being assigned and then removed.
+This reassignment pushes back when the review is completed and wastes the assigned developers times.
+This problem is shown to exist in open source projects with 4-30\% of reviews have problems with reviewer assignment \cite{thongtanunam15}.
+Although this problem does appear to be less prevalent in commercial environments \cite{kovalenko18}.
+To solve this problem many systems have been developed to make recommendations for reviewers.
+
+
+\section{Related work}
+I propose a method of reviewer recommendation based on code analysis.
+Developers highlighted that they look for reviewers that are currently working on the changed piece of code, ownership of modified and related code, and knowledge \cite{kovalenko18}.
+For those reasons in this method, I will use code ownership and experience with API’s used in the change to find the best reviewer.
+To achieve this goal I will be using git history and code analysis to assign ownership at multiple levels (method, class, and file) and with different relations to the changed code (directly modified, related through calls, and similar API’s).
+From the ownership data, I will be able to connect developers to the changed code and make a recommendation based on how knowledgeable and familiar they are with the changes.
+
+\section{Hypothesis}
+From this method I suspect that the suggested reviewers will be the best to review, understand, and critique the modified code, preventing defects and ensuring code quality.
+I specifically expect it to outperform existing methods that do not work on at a fine-grained level.
+Existing approaches often work on a per file-level which may use files changed and their relations within the directory structure \cite{thongtanunam15}.
+Reviewers that have a relationship to the changed code although not directly have been shown to still be useful in code reviews \cite{kovalenko18,thongtanunam16}.
+Fine-grained analysis using version history has been successfully implemented for defect detection.
+A conclusion from this analysis is that a lack of experience with affected code sections can lead to defects \cite{rahman11}.
+This suggests that looking deeper into changes and extracting finer-grained data will improve reviewer recommendations.
+The suggestions of better reviewers will save developers time, and reduce defects.
+
+I will be addressing a single research question that is comprised of smaller components which will be tested both individually as well as all together.
+\begin{itemize}
+    \item \textbf{RQ1:} Does code ownership and API experience of affected and related elements correlate with the best reviewer for any given change?
+        \begin{itemize}
+            \item \textbf{RQ1.1:} Does code ownership of affected elements correlate with the best reviewer for any given change?
+            \item \textbf{RQ1.2:} Does code ownership of related elements correlate with the best reviewer for any given change?
+            \item \textbf{RQ1.3:} Does experience with API’s used in a change correlate with the best reviewer for any given change?
+        \end{itemize}
+\end{itemize}
+
+\section{Experiments}
+To test this method of review recommendation, I will use existing open-source software projects that use reviewers.
+In these projects, I will take closed pull requests, using the final reviewer(s) as ground truth that I will compare against.
+This allows the method to be tested in a real-world environment where it would be used.
+The results from these experiments will show the viability of method.
+
+\section{Results}
+To analyze the data collected from the experiments, I will use tests used by other reviewer recommender systems.
+These tests include top-k accuracy and  Mean Reciprocal Rank (MRR) \cite{thongtanunam15,kovalenko18}.
+The tests will allow for the method to be tested for viability and compared against existing approaches, allowing the research questions to be answered.
+
+\printbibliography
+\end{document}
