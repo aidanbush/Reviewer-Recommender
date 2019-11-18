@@ -210,12 +210,17 @@ def assign_file_ownership(file_obj, conn, author_lines):
 def check_overlap(start1, end1, start2, end2):
     return len(range(max([start1, start2]), min([end1, end2]) + 1))
 
-def assign_func_ownership(db_func, conn, author_lines):
+def author_ownership(start, end, author_lines):
     ownership = {author: 0 for author in author_lines.keys()}
 
     for author, lines in author_lines.items():
         for pair in lines:
-            ownership[author] += check_overlap(pair[0], pair[1], db_func["start_line"], db_func["end_line"])
+            ownership[author] += check_overlap(pair[0], pair[1], start, end)
+
+    return ownership
+
+def assign_func_ownership(db_func, conn, author_lines):
+    ownership = author_ownership(db_func["start_line"], db_func["end_line"], author_lines)
 
     size = db_func["end_line"] - db_func["start_line"] + 1
 
@@ -239,6 +244,31 @@ def assign_file_funcs_ownership(file_obj, conn, author_lines):
     for func in results:
         assign_func_ownership(func, conn, author_lines)
 
+def assign_class_ownership(db_class, conn, author_lines):
+    ownership = author_ownership(db_class["start_line"], db_class["end_line"], author_lines)
+
+    size = db_class["end_line"] - db_class["start_line"] + 1
+
+    for author, num_lines in ownership.items():
+        if num_lines != 0:
+            c = conn.cursor()
+            c.execute("INSERT INTO class_ownership (contributor, class_id, ownership) VALUES (%s, %s, %s)",
+                    (author, db_class["id"], num_lines/size, ))
+            conn.commit()
+            c.close()
+
+def assign_file_class_ownership(file_obj, conn, author_lines):
+    # get all classes
+    c = conn.cursor()
+    rows = c.execute("SELECT * FROM classes where filepath = (%s)", (file_obj["repopath"], ))
+    keys = [k[0].decode('ascii') for k in c.description]
+    results = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    # for each class assign ownership
+    for c in results:
+        assign_class_ownership(c, conn, author_lines)
+
 def assign_ownership(file_obj, branch, repo, conn):
     author_lines = get_author_file_ownership(file_obj, branch, repo)
 
@@ -247,6 +277,7 @@ def assign_ownership(file_obj, branch, repo, conn):
     # func ownership
     assign_file_funcs_ownership(file_obj, conn, author_lines)
     # class ownership
+    assign_file_class_ownership(file_obj, conn, author_lines)
 
 def get_repo_files(repo):
     path_len = len(str(repo.path))
