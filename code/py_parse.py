@@ -2,12 +2,13 @@
 import ast
 import pg8000
 import pydriller
+import os
 
 def trim_filename(filename):
     return filename[:-3]
 
 class Visitor(ast.NodeVisitor):
-    def __init__(self, filename, filepath, conn):
+    def __init__(self, filepath, filename, conn):
         self.filename = filename
         self.filepath = filepath
         self.conn = conn
@@ -98,14 +99,14 @@ class Visitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
-def process_file(filepath, filename, conn):
+def process_file(filepath, repopath, filename, conn):
     f = open(filepath)
 
     a = ast.parse(f.read(), filename=filename)
 
     f.close()
 
-    visitor = Visitor(filename, filepath, conn)
+    visitor = Visitor(repopath, filename, conn)
 
     visitor.visit(a)
 
@@ -166,7 +167,7 @@ def handle_related_funcs(conn):
 
 def get_author_file_ownership(file_obj, branch, repo):
     # blame file
-    lines = repo.repo.blame(branch, file_obj["name"])
+    lines = repo.repo.blame(branch, file_obj["repopath"])
 
     author_lines = {}
     cur_line = 1
@@ -202,9 +203,41 @@ def assign_file_ownership(file_obj, conn, author_lines):
     for email, num_lines in owned_lines.items():
         c = conn.cursor()
         c.execute("INSERT INTO file_ownership (contributor, file_path, ownership) VALUES (%s, %s, %s)",
-                (email, file_obj["path"], num_lines/size, ))
+                (email, file_obj["repopath"], num_lines/size, ))
         conn.commit()
         c.close()
+
+def check_overlap(start1, end1, start2, end2):
+    return len(range(max([start1, start2]), min([end1, end2]) + 1))
+
+def assign_func_ownership(db_func, conn, author_lines):
+    ownership = {author: 0 for author in author_lines.keys()}
+
+    for author, lines in author_lines.items():
+        for pair in lines:
+            ownership[author] += check_overlap(pair[0], pair[1], db_func["start_line"], db_func["end_line"])
+
+    size = db_func["end_line"] - db_func["start_line"] + 1
+
+    for author, num_lines in ownership.items():
+        if num_lines != 0:
+            c = conn.cursor()
+            c.execute("INSERT INTO func_ownership (contributor, func_id, ownership) VALUES (%s, %s, %s)",
+                    (author, db_func["id"], num_lines/size, ))
+            conn.commit()
+            c.close()
+
+def assign_file_funcs_ownership(file_obj, conn, author_lines):
+    # get all funcs
+    c = conn.cursor()
+    rows = c.execute("SELECT * FROM functions where filepath = (%s)", (file_obj["repopath"], ))
+    keys = [k[0].decode('ascii') for k in c.description]
+    results = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    # for each func assign ownership
+    for func in results:
+        assign_func_ownership(func, conn, author_lines)
 
 def assign_ownership(file_obj, branch, repo, conn):
     author_lines = get_author_file_ownership(file_obj, branch, repo)
@@ -212,11 +245,13 @@ def assign_ownership(file_obj, branch, repo, conn):
     # file ownership
     assign_file_ownership(file_obj, conn, author_lines)
     # func ownership
+    assign_file_funcs_ownership(file_obj, conn, author_lines)
     # class ownership
 
 def get_repo_files(repo):
     path_len = len(str(repo.path))
-    return [{"path": f, "name": f[path_len + 1: ]} for f in repo.files()]
+    return [{"path": f, "repopath": f[path_len + 1: ], "name": os.path.basename(f[path_len + 1: ])}
+            for f in repo.files()]
 
 def parse_repo(repo):
     # connect to db
@@ -227,7 +262,7 @@ def parse_repo(repo):
 
     # parse python files
     for f in files:
-        process_file(f["path"], f["name"], conn)
+        process_file(f["path"], f["repopath"], f["name"], conn)
 
     handle_related_funcs(conn)
 
