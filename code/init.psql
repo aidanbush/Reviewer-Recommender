@@ -1,0 +1,71 @@
+DROP DATABASE IF EXISTS review_recomender;
+
+CREATE DATABASE review_recomender;
+
+\c review_recomender
+
+-- class and function line trackers
+
+CREATE TABLE functions (
+    id SERIAL NOT NULL PRIMARY KEY,
+    filename TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    name TEXT NOT NULL,
+    start_line INT NOT NULL,
+    end_line INT NOT NULL
+);
+
+CREATE TABLE classes (
+    id SERIAL NOT NULL PRIMARY KEY,
+    filename TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    name TEXT NOT NULL,
+    start_line INT NOT NULL,
+    end_line INT NOT NULL
+);
+
+CREATE TABLE func_call (
+    filename TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    base_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    start_line INT NOT NULL,
+    end_line INT NOT NULL
+);
+
+-- ownership
+CREATE TABLE contributer_ownership (
+    contributer TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    start_line INT NOT NULL,
+    end_line INT NOT NULL
+);
+
+-- fill once ownership is done
+CREATE TABLE func_ownership (
+    contributor TEXT NOT NULL,
+    func_id INT NOT NULL,
+    ownership FLOAT NOT NULL,
+    FOREIGN KEY(func_id) REFERENCES functions(id)
+);
+
+CREATE TABLE class_ownership (
+    contributor TEXT NOT NULL,
+    class_id INT NOT NULL,
+    ownership FLOAT NOT NULL,
+    FOREIGN KEY(class_id) REFERENCES classes(id)
+);
+
+CREATE TABLE file_ownership (
+    contributor TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    ownership FLOAT NOT NULL
+);
+
+-- related funcitons
+CREATE TABLE related_funcs (
+    caller_id INT NOT NULL,
+    called_id INT NOT NULL,
+    FOREIGN KEY(caller_id) REFERENCES functions(id),
+    FOREIGN KEY(called_id) REFERENCES functions(id)
+);

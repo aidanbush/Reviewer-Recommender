@@ -7,8 +7,9 @@ def trim_filename(filename):
     return filename[:-3]
 
 class Visitor(ast.NodeVisitor):
-    def __init__(self, filename, conn):
+    def __init__(self, filename, filepath, conn):
         self.filename = filename
+        self.filepath = filepath
         self.conn = conn
         self.import_name = trim_filename(filename)
         self.import_mappings = {}
@@ -41,8 +42,8 @@ class Visitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         c = self.conn.cursor()
-        c.execute("INSERT INTO functions (filename, name, start_line, end_line) VALUES (%s, %s, %s, %s)",
-                (self.filename, node.name, node.lineno, node.end_lineno))
+        c.execute("INSERT INTO functions (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
+                (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
         self.conn.commit()
         c.close()
 
@@ -50,8 +51,8 @@ class Visitor(ast.NodeVisitor):
 
     def visit_AsyncFunctionDef(self, node):
         c = self.conn.cursor()
-        c.execute("INSERT INTO functions (filename, name, start_line, end_line) VALUES (%s, %s, %s, %s)",
-                (self.filename, node.name, node.lineno, node.end_lineno))
+        c.execute("INSERT INTO functions (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
+                (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
         self.conn.commit()
         c.close()
 
@@ -79,8 +80,8 @@ class Visitor(ast.NodeVisitor):
         # add to db
 
         c = self.conn.cursor()
-        c.execute("INSERT INTO func_call (filename, base_name, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
-                (self.filename, base, func_name, node.lineno, node.end_lineno))
+        c.execute("INSERT INTO func_call (filename, filepath, base_name, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s, %s)",
+                (self.filename, self.filepath, base, func_name, node.lineno, node.end_lineno))
         self.conn.commit()
         c.close()
 
@@ -90,8 +91,8 @@ class Visitor(ast.NodeVisitor):
         # add to db
 
         c = self.conn.cursor()
-        c.execute("INSERT INTO classes (filename, name, start_line, end_line) VALUES (%s, %s, %s, %s)",
-                (self.filename, node.name, node.lineno, node.end_lineno))
+        c.execute("INSERT INTO classes (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
+                (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
         self.conn.commit()
         c.close()
 
@@ -104,7 +105,7 @@ def process_file(filepath, filename, conn):
 
     f.close()
 
-    visitor = Visitor(filename, conn)
+    visitor = Visitor(filename, filepath, conn)
 
     visitor.visit(a)
 
@@ -165,7 +166,7 @@ def handle_related_funcs(conn):
 
 def get_author_file_ownership(file_obj, branch, repo):
     # blame file
-    lines = repo.repo.blame(branch, file_obj[1])
+    lines = repo.repo.blame(branch, file_obj["name"])
 
     author_lines = {}
     cur_line = 1
@@ -191,7 +192,6 @@ def get_author_file_ownership(file_obj, branch, repo):
 def assign_file_ownership(file_obj, conn, author_lines):
     owned_lines = {}
 
-    print(author_lines)
     for email, pairs in author_lines.items():
         owned_lines[email] = 0
         for pair in pairs:
@@ -199,16 +199,12 @@ def assign_file_ownership(file_obj, conn, author_lines):
 
     size = sum(s for s in owned_lines.values())
 
-    print(owned_lines)
     for email, num_lines in owned_lines.items():
         c = conn.cursor()
-        c.execute("INSERT INTO file_ownership (contributor, filename, ownership) VALUES (%s, %s, %s)",
-                (email, file_obj[1], num_lines/size, ))
+        c.execute("INSERT INTO file_ownership (contributor, file_path, ownership) VALUES (%s, %s, %s)",
+                (email, file_obj["path"], num_lines/size, ))
         conn.commit()
         c.close()
-
-def assign_func_ownership(filename):
-    pass
 
 def assign_ownership(file_obj, branch, repo, conn):
     author_lines = get_author_file_ownership(file_obj, branch, repo)
@@ -220,7 +216,7 @@ def assign_ownership(file_obj, branch, repo, conn):
 
 def get_repo_files(repo):
     path_len = len(str(repo.path))
-    return [(f, f[path_len + 1: ]) for f in repo.files()]
+    return [{"path": f, "name": f[path_len + 1: ]} for f in repo.files()]
 
 def parse_repo(repo):
     # connect to db
@@ -231,7 +227,7 @@ def parse_repo(repo):
 
     # parse python files
     for f in files:
-        process_file(f[0], f[1], conn)
+        process_file(f["path"], f["name"], conn)
 
     handle_related_funcs(conn)
 
