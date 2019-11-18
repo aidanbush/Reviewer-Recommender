@@ -1,6 +1,7 @@
 #!/bin/python3.8
 import ast
 import pg8000
+import pydriller
 
 def trim_filename(filename):
     return filename[:-3]
@@ -22,7 +23,6 @@ class Visitor(ast.NodeVisitor):
 
     def visit_Import(self, node):
         for name in node.names:
-            print("import", name)
             if name.asname is not None:
                 self.add_import_mapping(name.asname, name.name)
             else:
@@ -32,7 +32,6 @@ class Visitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node):
         for name in node.names:
-            print("import from", name)
             if name.asname is not None:
                 self.add_import_mapping(name.asname, node.module)
             else:
@@ -41,8 +40,6 @@ class Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node):
-        print("func", node.name, node.lineno, node.end_lineno)
-        
         c = self.conn.cursor()
         c.execute("INSERT INTO functions (filename, name, start_line, end_line) VALUES (%s, %s, %s, %s)",
                 (self.filename, node.name, node.lineno, node.end_lineno))
@@ -52,8 +49,6 @@ class Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node):
-        print("async func", node.name, node.lineno, node.end_lineno)
-        
         c = self.conn.cursor()
         c.execute("INSERT INTO functions (filename, name, start_line, end_line) VALUES (%s, %s, %s, %s)",
                 (self.filename, node.name, node.lineno, node.end_lineno))
@@ -79,10 +74,7 @@ class Visitor(ast.NodeVisitor):
             base = self.import_name
 
         if base in self.import_mappings:
-            # add func call
-            print("call", self.import_mappings[base], func_name)
-        else:
-            print("call", self.filename, func_name)
+            base = self.import_mappings[base]
 
         # add to db
 
@@ -95,8 +87,6 @@ class Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ClassDef(self, node):
-        print("class", node.name, node.lineno, node.end_lineno)
-
         # add to db
 
         c = self.conn.cursor()
@@ -107,8 +97,8 @@ class Visitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
-def process_file(filename, conn):
-    f = open(filename)
+def process_file(filepath, filename, conn):
+    f = open(filepath)
 
     a = ast.parse(f.read(), filename=filename)
 
@@ -173,18 +163,86 @@ def handle_related_funcs(conn):
                     conn.commit()
                     c.close()
 
+def get_author_file_ownership(file_obj, branch, repo):
+    # blame file
+    lines = repo.repo.blame(branch, file_obj[1])
 
-def main():
+    author_lines = {}
+    cur_line = 1
+
+    last_author = None
+
+    # process lines
+    for commit, line in lines:
+        email = commit.author.email
+        if commit.author.email not in author_lines:
+            author_lines[email] = []
+
+        if email == last_author:
+            author_lines[email][-1] = (author_lines[email][-1][0], cur_line + len(line) - 1)
+        else:
+            author_lines[email].append((cur_line, cur_line + len(line) - 1))
+
+        last_author = email
+        cur_line += len(line)
+
+    return author_lines
+
+def assign_file_ownership(file_obj, conn, author_lines):
+    owned_lines = {}
+
+    print(author_lines)
+    for email, pairs in author_lines.items():
+        owned_lines[email] = 0
+        for pair in pairs:
+            owned_lines[email] += pair[1] - pair[0] + 1
+
+    size = sum(s for s in owned_lines.values())
+
+    print(owned_lines)
+    for email, num_lines in owned_lines.items():
+        c = conn.cursor()
+        c.execute("INSERT INTO file_ownership (contributor, filename, ownership) VALUES (%s, %s, %s)",
+                (email, file_obj[1], num_lines/size, ))
+        conn.commit()
+        c.close()
+
+def assign_func_ownership(filename):
+    pass
+
+def assign_ownership(file_obj, branch, repo, conn):
+    author_lines = get_author_file_ownership(file_obj, branch, repo)
+
+    # file ownership
+    assign_file_ownership(file_obj, conn, author_lines)
+    # func ownership
+    # class ownership
+
+def get_repo_files(repo):
+    path_len = len(str(repo.path))
+    return [(f, f[path_len + 1: ]) for f in repo.files()]
+
+def parse_repo(repo):
     # connect to db
     conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
 
-    # parse python file
-    filename="test.py"
-    process_file(filename, conn)
+    repo = pydriller.GitRepository(repo)
+    files = get_repo_files(repo)
+
+    # parse python files
+    for f in files:
+        process_file(f[0], f[1], conn)
 
     handle_related_funcs(conn)
 
+    # assign ownership
+    for f in files:
+        assign_ownership(f, 'master', repo, conn)
+
     conn.close()
 
+
+def main():
+    parse_repo("test_repo")
 
 main()
