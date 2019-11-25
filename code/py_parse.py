@@ -293,8 +293,7 @@ def assign_api_ownership(db_func_call, conn, author_lines):
             c.close()
 
 def assign_file_api_ownership(file_obj, conn, author_lines):
-    # TODO do
-    # get all func calls for the file
+    # threat std lib functions appear to be file specific
     c = conn.cursor()
     rows = c.execute("SELECT * FROM func_call WHERE filepath = (%s)",
             (file_obj["repopath"],))
@@ -325,8 +324,14 @@ def get_repo_files(repo):
     return [{"path": f, "repopath": f[path_len + 1: ], "name": os.path.basename(f[path_len + 1: ])}
             for f in repo.files()]
 
-def parse_repo(repo, conn):
-    repo = pydriller.GitRepository(repo)
+def change_repo_branch_commit(repo, branch, commit):
+    repo.repo.git.checkout(branch)
+    repo.repo.git.checkout(commit)
+
+def parse_repo(repo, conn, branch, commit):
+    # change to commit and branch
+    change_repo_branch_commit(repo, branch, commit)
+
     files = get_repo_files(repo)
 
     # parse python files
@@ -347,12 +352,12 @@ def get_contributors(conn):
 
     return results
 
-def rank_contributors(conn):
+def rank_contributors(conn, branch, commit):
     contributors = get_contributors(conn)
 
-    # get 
+    change_repo_branch_commit(branch, commit)
 
-    return
+    # get changes functions and classes
 
 def clear_db(conn):
     tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call"]
@@ -363,15 +368,26 @@ def clear_db(conn):
         conn.commit()
         c.close()
 
+def get_repo(repo_path):
+    return pydriller.GitRepository(repo_path)
+
 def main():
+    branch = "master"
+    commit = "HEAD"
+
     # connect to db
     conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
 
     # clear db
     clear_db(conn)
 
-    parse_repo("test_repo", conn)
-    #rank_contributors(conn)
+    repo = get_repo("test_repo")
+
+    parse_repo(repo, conn, branch, commit)
+
+    #rank_contributors(conn, branch, commit)
+
+    #repo.reset() # need?
 
     conn.close()
 
