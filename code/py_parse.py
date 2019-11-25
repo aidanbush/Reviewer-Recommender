@@ -190,6 +190,16 @@ def get_author_file_ownership(file_obj, branch, repo):
 
     return author_lines
 
+def insert_author_lines(repopath, author_lines, conn):
+    for author, lines in author_lines.items():
+        for pair in lines:
+            # insert into db
+            c = conn.cursor()
+            c.execute("INSERT INTO contributor_ownership (contributor, filepath, start_line, end_line) VALUES (%s, %s, %s, %s)",
+                    (author, repopath, pair[0], pair[1], ))
+            conn.commit()
+            c.close()
+
 def assign_file_ownership(file_obj, conn, author_lines):
     owned_lines = {}
 
@@ -269,8 +279,37 @@ def assign_file_class_ownership(file_obj, conn, author_lines):
     for c in results:
         assign_class_ownership(c, conn, author_lines)
 
+def assign_api_ownership(db_func_call, conn, author_lines):
+    ownership = author_ownership(db_func_call["start_line"], db_func_call["end_line"], author_lines)
+
+    for author, num_lines in ownership.items():
+        if num_lines != 0:
+            c = conn.cursor()
+            # upsert
+            c.execute("INSERT INTO api_ownership (contributor, base, name, counts) VALUES (%s, %s, %s, %s)"
+                    + "ON CONFLICT (contributor, base, name) DO UPDATE SET counts = api_ownership.counts + (%s)",
+                    (author, db_func_call["base_name"], db_func_call["name"], 1, 1, ))
+            conn.commit()
+            c.close()
+
+def assign_file_api_ownership(file_obj, conn, author_lines):
+    # TODO do
+    # get all func calls for the file
+    c = conn.cursor()
+    rows = c.execute("SELECT * FROM func_call WHERE filepath = (%s)",
+            (file_obj["repopath"],))
+    keys = [k[0].decode('ascii') for k in c.description]
+    results = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    # for each func assign ownership
+    for c in results:
+        assign_api_ownership(c, conn, author_lines)
+
 def assign_ownership(file_obj, branch, repo, conn):
     author_lines = get_author_file_ownership(file_obj, branch, repo)
+    # done so we can use it later
+    insert_author_lines(file_obj["repopath"], author_lines, conn)
 
     # file ownership
     assign_file_ownership(file_obj, conn, author_lines)
@@ -278,16 +317,15 @@ def assign_ownership(file_obj, branch, repo, conn):
     assign_file_funcs_ownership(file_obj, conn, author_lines)
     # class ownership
     assign_file_class_ownership(file_obj, conn, author_lines)
+    # TODO api ownership
+    assign_file_api_ownership(file_obj, conn, author_lines)
 
 def get_repo_files(repo):
     path_len = len(str(repo.path))
     return [{"path": f, "repopath": f[path_len + 1: ], "name": os.path.basename(f[path_len + 1: ])}
             for f in repo.files()]
 
-def parse_repo(repo):
-    # connect to db
-    conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
-
+def parse_repo(repo, conn):
     repo = pydriller.GitRepository(repo)
     files = get_repo_files(repo)
 
@@ -301,10 +339,40 @@ def parse_repo(repo):
     for f in files:
         assign_ownership(f, 'master', repo, conn)
 
-    conn.close()
+def get_contributors(conn):
+    c = conn.cursor()
+    rows = c.execute("SELECT DISTINCT contributor FROM contributor_ownership", ())
+    results = {row[0]:{"affected":0, "related":0, "API":0} for row in rows}
+    c.close()
 
+    return results
+
+def rank_contributors(conn):
+    contributors = get_contributors(conn)
+
+    # get 
+
+    return
+
+def clear_db(conn):
+    tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call"]
+
+    for table in tables:
+        c = conn.cursor()
+        c.execute("DELETE FROM " + table, ())
+        conn.commit()
+        c.close()
 
 def main():
-    parse_repo("test_repo")
+    # connect to db
+    conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
+
+    # clear db
+    clear_db(conn)
+
+    parse_repo("test_repo", conn)
+    #rank_contributors(conn)
+
+    conn.close()
 
 main()
