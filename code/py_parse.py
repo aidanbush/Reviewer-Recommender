@@ -316,7 +316,7 @@ def assign_ownership(file_obj, branch, repo, conn):
     assign_file_funcs_ownership(file_obj, conn, author_lines)
     # class ownership
     assign_file_class_ownership(file_obj, conn, author_lines)
-    # TODO api ownership
+    # api ownership
     assign_file_api_ownership(file_obj, conn, author_lines)
 
 def get_repo_files(repo):
@@ -352,12 +352,44 @@ def get_contributors(conn):
 
     return results
 
-def rank_contributors(conn, branch, commit):
+def get_changes(repo, diff_commit, repo_path):
+    # go to PR commit
+
+    lines = repo.git().diff(diff_commit).split('\n')
+
+    files = {}
+
+    path_name = ''
+    base_name = ''
+
+    # search through for lines starting with "diff --git"
+    for l in lines:
+        if l.startswith("diff --git"):
+            # extract first and second file names from there
+            path_name = l.split()[-1][2:]
+            base_name = os.path.basename(path_name) # basename
+            files[(path_name, base_name)] = []
+        elif l.startswith("@@"):
+            # search for @@ modified lines and add to list
+            # second set of ranges
+            start_lineno = int(l.split(' ')[2].split(',')[0][1:])
+            end_lineno = int(l.split(' ')[2].split(',')[1])
+            files[(path_name, base_name)].append((start_lineno, end_lineno))
+
+    # parse files
+    for path_name, lines in files.items():
+        file_path = repo_path + '/' + path_name
+        # parse file
+
+    return
+
+def rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit):
     contributors = get_contributors(conn)
 
-    change_repo_branch_commit(branch, commit)
+    #change_repo_branch_commit(branch, commit)
 
     # get changes functions and classes
+    get_changes()
 
 def clear_db(conn):
     tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call"]
@@ -372,8 +404,10 @@ def get_repo(repo_path):
     return pydriller.GitRepository(repo_path)
 
 def main():
-    branch = "master"
-    commit = "HEAD"
+    main_branch = "master"
+    main_commit = "HEAD"
+    PR_branch = "PR"
+    PR_commit = "HEAD"
 
     # connect to db
     conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
@@ -381,11 +415,13 @@ def main():
     # clear db
     clear_db(conn)
 
-    repo = get_repo("test_repo")
+    repo_path = "test_repo"
 
-    parse_repo(repo, conn, branch, commit)
+    repo = get_repo(repo_path)
 
-    #rank_contributors(conn, branch, commit)
+    parse_repo(repo, conn, main_branch, main_commit)
+
+    #rank_contributors(repo, repo_path, conn, PR_branch, PR_commit)
 
     #repo.reset() # need?
 
