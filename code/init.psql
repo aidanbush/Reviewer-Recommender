@@ -34,9 +34,9 @@ CREATE TABLE func_call (
 );
 
 -- ownership
-CREATE TABLE contributer_ownership (
-    contributer TEXT NOT NULL,
-    filename TEXT NOT NULL,
+CREATE TABLE contributor_ownership (
+    contributor TEXT NOT NULL,
+    filepath TEXT NOT NULL,
     start_line INT NOT NULL,
     end_line INT NOT NULL
 );
@@ -60,6 +60,16 @@ CREATE TABLE file_ownership (
     contributor TEXT NOT NULL,
     file_path TEXT NOT NULL,
     ownership FLOAT NOT NULL
+);
+
+--API
+-- threat assume all file names are unique when counting internal APIs
+CREATE TABLE api_ownership (
+    contributor TEXT NOT NULL,
+    base TEXT NOT NULL,
+    name TEXT NOT NULL,
+    counts INT NOT NULL,
+    PRIMARY KEY(contributor, base, name)
 );
 
 -- related funcitons
