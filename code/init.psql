@@ -79,3 +79,27 @@ CREATE TABLE related_funcs (
     FOREIGN KEY(caller_id) REFERENCES functions(id),
     FOREIGN KEY(called_id) REFERENCES functions(id)
 );
+
+-- modified
+CREATE TABLE modified_funcs (
+    filename TEXT NOT NULL, -- old name
+    filepath TEXT NOT NULL, -- old path
+    name TEXT NOT NULL
+);
+
+CREATE TABLE modified_classes (
+    filename TEXT NOT NULL, -- old name
+    filepath TEXT NOT NULL, -- old path
+    name TEXT NOT NULL
+);
+
+CREATE TABLE modified_files (
+    filepath TEXT NOT NULL -- old path
+);
+
+CREATE TABLE modified_func_calls (
+    base_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    counts INT NOT NULL,
+    PRIMARY KEY(base_name, name)
+);

@@ -7,14 +7,30 @@ import os
 def trim_filename(filename):
     return filename[:-3]
 
+def check_overlap(start1, end1, start2, end2):
+    return len(range(max([start1, start2]), min([end1, end2]) + 1))
+
 class Visitor(ast.NodeVisitor):
-    def __init__(self, filepath, filename, conn):
+    def __init__(self, filepath, filename, conn, lines, old_filepath, old_filename):
         self.filename = filename
         self.filepath = filepath
         self.conn = conn
         self.import_name = trim_filename(filename)
         self.import_mappings = {}
+        self.lines = lines
+        self.old_filepath = old_filepath
+        self.old_filename = old_filename
         return
+
+    def check_lines_overlap(self, start_lineno, end_lineno):
+        for pair in self.lines:
+            start = pair[0]
+            end = pair[1]
+
+            if check_overlap(start, end, start_lineno, end_lineno) != 0:
+                return True
+
+        return False
 
     def clean_import_names(self, name):
         # Threat to validity in how I handle imports
@@ -42,24 +58,41 @@ class Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node):
-        c = self.conn.cursor()
-        c.execute("INSERT INTO functions (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
-                (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
-        self.conn.commit()
-        c.close()
+        # check lines
+        if len(self.lines) == 0:
+            c = self.conn.cursor()
+            c.execute("INSERT INTO functions (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
+                    (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
+            self.conn.commit()
+            c.close()
+        elif self.check_lines_overlap(node.lineno, node.end_lineno):
+            c = self.conn.cursor()
+            c.execute("INSERT INTO modified_funcs (filename, filepath, name) VALUES (%s, %s, %s)",
+                    (self.old_filename, self.old_filepath, node.name))
+            self.conn.commit()
+            c.close()
 
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node):
-        c = self.conn.cursor()
-        c.execute("INSERT INTO functions (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
-                (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
-        self.conn.commit()
-        c.close()
+        # check lines
+        if len(self.lines) == 0:
+            c = self.conn.cursor()
+            c.execute("INSERT INTO functions (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
+                    (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
+            self.conn.commit()
+            c.close()
+        elif self.check_lines_overlap(node.lineno, node.end_lineno):
+            c = self.conn.cursor()
+            c.execute("INSERT INTO modified_funcs (filename, filepath, name) VALUES (%s, %s, %s)",
+                    (self.old_filename, self.old_filepath, node.name))
+            self.conn.commit()
+            c.close()
 
         self.generic_visit(node)
 
     def visit_Call(self, node):
+        # check lines
         base = None
 
         if hasattr(node.func, "id"):
@@ -80,33 +113,59 @@ class Visitor(ast.NodeVisitor):
 
         # add to db
 
-        c = self.conn.cursor()
-        c.execute("INSERT INTO func_call (filename, filepath, base_name, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s, %s)",
-                (self.filename, self.filepath, base, func_name, node.lineno, node.end_lineno))
-        self.conn.commit()
-        c.close()
+        if len(self.lines) == 0:
+            c = self.conn.cursor()
+            c.execute("INSERT INTO func_call (filename, filepath, base_name, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (self.filename, self.filepath, base, func_name, node.lineno, node.end_lineno))
+            self.conn.commit()
+            c.close()
+        elif self.check_lines_overlap(node.lineno, node.end_lineno):
+            c = self.conn.cursor()
+            c.execute("INSERT INTO modified_func_calls (base_name, name, counts) VALUES (%s, %s, %s)"
+                    + "ON CONFLICT (base_name, name) DO UPDATE SET counts = modified_func_calls.counts + (%s)",
+                    (base, func_name, 1, 1, ))
+            self.conn.commit()
+            c.close()
 
         self.generic_visit(node)
 
     def visit_ClassDef(self, node):
+        # check lines
         # add to db
 
-        c = self.conn.cursor()
-        c.execute("INSERT INTO classes (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
-                (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
-        self.conn.commit()
-        c.close()
+        if len(self.lines) == 0:
+            c = self.conn.cursor()
+            c.execute("INSERT INTO classes (filename, filepath, name, start_line, end_line) VALUES (%s, %s, %s, %s, %s)",
+                    (self.filename, self.filepath, node.name, node.lineno, node.end_lineno))
+            self.conn.commit()
+            c.close()
+        else:
+            print("func")
+            print(self.lines)
+            print(node.lineno, node.end_lineno)
+            o = self.check_lines_overlap(node.lineno, node.end_lineno)
+            print(o)
+            if o:
+                c = self.conn.cursor()
+                c.execute("INSERT INTO modified_classes (filename, filepath, name) VALUES (%s, %s, %s)",
+                        (self.old_filename, self.old_filepath, node.name))
+                self.conn.commit()
+                c.close()
 
         self.generic_visit(node)
 
-def process_file(filepath, repopath, filename, conn):
+def process_file(filepath, repopath, filename, conn, lines, old_repopath, old_filename):
+    if not os.path.isfile(filepath):
+        print("file", filepath, "does not exist")
+        return
+
     f = open(filepath)
 
     a = ast.parse(f.read(), filename=filename)
 
     f.close()
 
-    visitor = Visitor(repopath, filename, conn)
+    visitor = Visitor(repopath, filename, conn, lines, old_repopath, old_filename)
 
     visitor.visit(a)
 
@@ -216,9 +275,6 @@ def assign_file_ownership(file_obj, conn, author_lines):
                 (email, file_obj["repopath"], num_lines/size, ))
         conn.commit()
         c.close()
-
-def check_overlap(start1, end1, start2, end2):
-    return len(range(max([start1, start2]), min([end1, end2]) + 1))
 
 def author_ownership(start, end, author_lines):
     ownership = {author: 0 for author in author_lines.keys()}
@@ -336,7 +392,7 @@ def parse_repo(repo, conn, branch, commit):
 
     # parse python files
     for f in files:
-        process_file(f["path"], f["repopath"], f["name"], conn)
+        process_file(f["path"], f["repopath"], f["name"], conn, [], f["path"], f["name"])
 
     handle_related_funcs(conn)
 
@@ -352,47 +408,69 @@ def get_contributors(conn):
 
     return results
 
-def get_changes(repo, diff_commit, repo_path):
+def get_changes(repo, conn, diff_commit, repo_path):
     # go to PR commit
 
     lines = repo.git().diff(diff_commit).split('\n')
+    print(lines)
 
     files = {}
 
     path_name = ''
     base_name = ''
+    old_path = ''
+    old_base = ''
 
     # search through for lines starting with "diff --git"
     for l in lines:
         if l.startswith("diff --git"):
             # extract first and second file names from there
             path_name = l.split()[-1][2:]
-            base_name = os.path.basename(path_name) # basename
-            files[(path_name, base_name)] = []
+            base_name = os.path.basename(path_name)
+            old_path = l.split()[2][2:]
+            old_base = os.path.basename(path_name)
+            files[(path_name, base_name, old_path, old_base)] = []
         elif l.startswith("@@"):
             # search for @@ modified lines and add to list
             # second set of ranges
             start_lineno = int(l.split(' ')[2].split(',')[0][1:])
-            end_lineno = int(l.split(' ')[2].split(',')[1])
-            files[(path_name, base_name)].append((start_lineno, end_lineno))
+            end_lineno = start_lineno + int(l.split(' ')[2].split(',')[1])
+            files[(path_name, base_name, old_path, old_base)].append((start_lineno, end_lineno))
 
     # parse files
-    for path_name, lines in files.items():
-        file_path = repo_path + '/' + path_name
-        # parse file
+    for name, lines in files.items():
+        filepath = name[0]
+        filename = name[1]
+        old_filepath = name[2]
+        old_filename = name[3]
 
-    return
+        if old_filepath == '' or old_filename == '':
+            continue
+
+        source_filepath = repo_path + '/' + filepath
+        # parse file
+        process_file(source_filepath, filepath, filename, conn, lines, old_filepath, old_filename)
+
+        # add file
+        c = conn.cursor()
+        c.execute("INSERT INTO modified_files (filepath) VALUES (%s)",
+                (old_filepath, ))
+        conn.commit()
+        c.close()
+
 
 def rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit):
     contributors = get_contributors(conn)
 
-    #change_repo_branch_commit(branch, commit)
+    change_repo_branch_commit(repo, PR_branch, PR_commit)
 
     # get changes functions and classes
-    get_changes()
+    get_changes(repo, conn, main_commit, repo_path)
+
+    # rank
 
 def clear_db(conn):
-    tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call"]
+    tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call" , "modified_funcs", "modified_classes", "modified_files", "modified_func_calls"]
 
     for table in tables:
         c = conn.cursor()
@@ -405,9 +483,9 @@ def get_repo(repo_path):
 
 def main():
     main_branch = "master"
-    main_commit = "HEAD"
+    main_commit = "8c1dcfd84d357d4e5e27cb4725217955aa922e48" # "HEAD"
     PR_branch = "PR"
-    PR_commit = "HEAD"
+    PR_commit = "2ea4278b463d02134844a14f078609f4cac93c93" # "HEAD"
 
     # connect to db
     conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
@@ -421,9 +499,9 @@ def main():
 
     parse_repo(repo, conn, main_branch, main_commit)
 
-    #rank_contributors(repo, repo_path, conn, PR_branch, PR_commit)
+    rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit)
 
-    #repo.reset() # need?
+    repo.reset() # need?
 
     conn.close()
 
