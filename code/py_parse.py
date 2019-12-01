@@ -593,6 +593,43 @@ def api_usage_rank(conn):
 
     return contributors
 
+def get_ranks(scores):
+    sorted_scores = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+
+    ranks = {}
+
+    current_rank = 0
+    last_score = 0
+    duplicates = 0
+
+    for pair in sorted_scores:
+        if pair[1] == last_score:
+            duplicates += 1
+        else:
+            duplicates = 0
+            current_rank += 1 + duplicates
+
+        ranks[pair[0]] = current_rank
+
+        last_score = pair[1]
+
+    return ranks
+
+# TODO check paper this is from
+def combine_ranks(ranks):
+    combined_ranks = {}
+
+    for rank_pairs in ranks:
+        for contributor, rank in rank_pairs.items():
+            if contributor in combined_ranks:
+                combined_ranks[contributor] += rank
+            else:
+                combined_ranks[contributor] = rank
+
+    sorted_ranks = sorted(combined_ranks.items(), key=lambda kv: kv[1])
+
+    return sorted_ranks
+
 def rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit):
     contributors = get_contributors(conn)
 
@@ -603,14 +640,23 @@ def rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch
 
     # rank
     # modified code rank
-    modified_ranks = modified_code_rank(conn)
+    modified_scores = modified_code_rank(conn)
     # related code rank
-    related_ranks = related_code_rank(conn)
+    related_scores = related_code_rank(conn)
     # api usage rank
-    api_ranks = api_usage_rank(conn)
+    api_scores = api_usage_rank(conn)
+
+    # rank
+    modified_ranks = get_ranks(modified_scores)
+    related_ranks = get_ranks(related_scores)
+    api_ranks = get_ranks(api_scores)
+
+    return combine_ranks([modified_ranks, related_ranks, api_ranks])
 
 def clear_db(conn):
-    tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call" , "modified_funcs", "modified_classes", "modified_files", "modified_func_calls", "modified_func_ids"]
+    tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership",
+            "contributor_ownership", "functions", "classes", "func_call" , "modified_funcs", "modified_classes",
+            "modified_files", "modified_func_calls", "modified_func_ids"]
 
     for table in tables:
         c = conn.cursor()
@@ -639,9 +685,9 @@ def main():
 
     parse_repo(repo, conn, main_branch, main_commit)
 
-    rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit)
+    repo.reset()
 
-    repo.reset() # need?
+    ranks = rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit)
 
     conn.close()
 
