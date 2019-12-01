@@ -37,6 +37,8 @@ class Visitor(ast.NodeVisitor):
         return name.split(".")[-1]
 
     def add_import_mapping(self, asname, name):
+        if name == None:
+            name = asname
         self.import_mappings[self.clean_import_names(asname)] = self.clean_import_names(name)
 
     def visit_Import(self, node):
@@ -140,12 +142,7 @@ class Visitor(ast.NodeVisitor):
             self.conn.commit()
             c.close()
         else:
-            print("func")
-            print(self.lines)
-            print(node.lineno, node.end_lineno)
-            o = self.check_lines_overlap(node.lineno, node.end_lineno)
-            print(o)
-            if o:
+            if self.check_lines_overlap(node.lineno, node.end_lineno):
                 c = self.conn.cursor()
                 c.execute("INSERT INTO modified_classes (filename, filepath, name) VALUES (%s, %s, %s)",
                         (self.old_filename, self.old_filepath, node.name))
@@ -412,7 +409,6 @@ def get_changes(repo, conn, diff_commit, repo_path):
     # go to PR commit
 
     lines = repo.git().diff(diff_commit).split('\n')
-    print(lines)
 
     files = {}
 
@@ -458,6 +454,144 @@ def get_changes(repo, conn, diff_commit, repo_path):
         conn.commit()
         c.close()
 
+def modified_code_rank(conn):
+    # funcs
+    c = conn.cursor()
+    rows = c.execute("SELECT contributor, SUM(ownership) AS score "
+            + "FROM modified_funcs AS mf, "
+                + "(SELECT contributor, fs.filepath, fs.name, fo.ownership "
+                + "FROM func_ownership AS fo, functions AS fs WHERE fo.func_id = fs.id) AS f "
+            + "WHERE mf.name = f.name AND mf.filepath = f.filepath GROUP BY f.contributor ",
+            ())
+    keys = [k[0].decode('ascii') for k in c.description]
+    funcs = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    # classes
+    c = conn.cursor()
+    rows = c.execute("SELECT contributor, SUM(ownership) AS score "
+            + "FROM modified_classes AS mc, "
+                + "(SELECT contributor, cs.filepath, cs.name, co.ownership "
+                + "FROM class_ownership AS co, classes as cs WHERE co.class_id = cs.id) AS c "
+            + "WHERE mc.name = c.name and mc.filepath = c.filepath GROUP BY c.contributor ",
+            ())
+    keys = [k[0].decode('ascii') for k in c.description]
+    classes = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    # files
+    c = conn.cursor()
+    rows = c.execute("SELECT contributor, SUM(ownership) AS score "
+            + "FROM modified_files as mf, file_ownership as fo "
+            + "WHERE mf.filepath = fo.file_path GROUP BY fo.contributor ",
+            ())
+    keys = [k[0].decode('ascii') for k in c.description]
+    files = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    contributors = {}
+
+    # add func scores
+    funcs_sum = sum(float(f["score"]) for f in funcs)
+    for func in funcs:
+        contributors[func["contributor"]] = float(func["score"]) / funcs_sum
+
+    # add class scores
+    classes_sum = sum(float(c["score"]) for c in classes)
+    for c in classes:
+        if c["contributor"] in contributors:
+            contributors[c["contributor"]] += float(c["score"]) / classes_sum
+        else:
+            contributors[c["contributor"]] = float(c["score"]) / classes_sum
+
+    # add file scores
+    files_sum = sum(float(f["score"]) for f in files)
+    for f in files:
+        if f["contributor"] in contributors:
+            contributors[f["contributor"]] += float(f["score"]) / files_sum
+        else:
+            contributors[f["contributor"]] = float(f["score"]) / files_sum
+
+    # normalize
+    for c in contributors:
+        contributors[c] = contributors[c] / 3
+
+    return contributors
+
+def related_code_rank(conn):
+    # fill modified_func_ids
+    c = conn.cursor()
+    c.execute("INSERT INTO modified_func_ids "
+            + "(SELECT DISTINCT f.id "
+                + "FROM modified_funcs AS mf, functions AS f "
+                + "WHERE mf.name = f.name AND mf.filepath = f.filepath) ",
+            ())
+    conn.commit()
+    c.close()
+
+    # get caller funcs
+    c = conn.cursor()
+    rows = c.execute("SELECT contributor, SUM(ownership) AS score "
+            + "FROM func_ownership AS fo, "
+                + "(SELECT DISTINCT caller_id AS id "
+                + "FROM related_funcs AS rf, modified_func_ids as mi "
+                + "WHERE rf.called_id = mi.id AND rf.caller_id NOT IN "
+                    + "(SELECT id from modified_func_ids)) AS fm "
+                + "WHERE fo.func_id = fm.id GROUP BY contributor",
+            ())
+    keys = [k[0].decode('ascii') for k in c.description]
+    caller_funcs = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    # get called funcs
+    c = conn.cursor()
+    rows = c.execute("SELECT contributor, SUM(ownership) AS score "
+            + "FROM func_ownership AS fo, "
+                + "(SELECT DISTINCT called_id AS id "
+                + "FROM related_funcs AS rf, modified_func_ids as mi "
+                + "WHERE rf.caller_id = mi.id AND rf.called_id NOT IN "
+                    + "(SELECT id from modified_func_ids)) AS fm "
+                + "WHERE fo.func_id = fm.id GROUP BY contributor",
+            ())
+    keys = [k[0].decode('ascii') for k in c.description]
+    called_funcs = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    # combine
+    total = sum(float(f["score"]) for f in caller_funcs) + sum(float(f["score"]) for f in called_funcs)
+    contributors = {}
+
+    for f in called_funcs:
+        contributors[f["contributor"]] = float(f["score"]) / total
+
+    for f in caller_funcs:
+        if f["contributor"] in contributors:
+            contributors[f["contributor"]] += float(f["score"]) / total
+        else:
+            contributors[f["contributor"]] = float(f["score"]) / total
+
+    return contributors
+
+def api_usage_rank(conn):
+    # get api usage scores
+    c = conn.cursor()
+    rows = c.execute("SELECT contributor, SUM(score) AS score "
+            + "FROM (SELECT mc.base_name, mc.name, ao.contributor, (mc.counts * ao.counts) AS score "
+                + "FROM modified_func_calls AS mc, api_ownership AS ao "
+                + "WHERE mc.base_name = ao.base AND mc.name = ao.name) AS scores "
+            + "GROUP BY contributor",
+            ())
+    keys = [k[0].decode('ascii') for k in c.description]
+    api_contributor_scores = [dict(zip(keys, row)) for row in rows]
+    c.close()
+
+    contributors = {}
+    total = sum(float(a["score"]) for a in api_contributor_scores)
+
+    for a in api_contributor_scores:
+        contributors[a["contributor"]] = float(a["score"]) / total
+
+    return contributors
 
 def rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit):
     contributors = get_contributors(conn)
@@ -468,9 +602,15 @@ def rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch
     get_changes(repo, conn, main_commit, repo_path)
 
     # rank
+    # modified code rank
+    modified_ranks = modified_code_rank(conn)
+    # related code rank
+    related_ranks = related_code_rank(conn)
+    # api usage rank
+    api_ranks = api_usage_rank(conn)
 
 def clear_db(conn):
-    tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call" , "modified_funcs", "modified_classes", "modified_files", "modified_func_calls"]
+    tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership", "contributor_ownership", "functions", "classes", "func_call" , "modified_funcs", "modified_classes", "modified_files", "modified_func_calls", "modified_func_ids"]
 
     for table in tables:
         c = conn.cursor()
@@ -483,9 +623,9 @@ def get_repo(repo_path):
 
 def main():
     main_branch = "master"
-    main_commit = "8c1dcfd84d357d4e5e27cb4725217955aa922e48" # "HEAD"
+    main_commit = "b0dae2fedc65878ef8a124aa0f878a1de7a2fcb3" # "HEAD"
     PR_branch = "PR"
-    PR_commit = "2ea4278b463d02134844a14f078609f4cac93c93" # "HEAD"
+    PR_commit = "23f437f1656fff0fe89aa18ce94be2080fcab35d" # "HEAD"
 
     # connect to db
     conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")

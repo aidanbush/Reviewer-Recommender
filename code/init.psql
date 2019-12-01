@@ -103,3 +103,7 @@ CREATE TABLE modified_func_calls (
     counts INT NOT NULL,
     PRIMARY KEY(base_name, name)
 );
+
+CREATE TABLE modified_func_ids (
+    id INT NOT NULL
+);
