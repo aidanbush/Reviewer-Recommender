@@ -3,6 +3,8 @@ import ast
 import pg8000
 import pydriller
 import os
+from github import Github
+from git import Repo
 
 def trim_filename(filename):
     return filename[:-3]
@@ -667,28 +669,85 @@ def clear_db(conn):
 def get_repo(repo_path):
     return pydriller.GitRepository(repo_path)
 
-def main():
-    main_branch = "master"
-    main_commit = "b0dae2fedc65878ef8a124aa0f878a1de7a2fcb3" # "HEAD"
-    PR_branch = "PR"
-    PR_commit = "23f437f1656fff0fe89aa18ce94be2080fcab35d" # "HEAD"
-
+def rank_PR(repo_path, main_branch, main_commit, PR_branch, PR_commit):
     # connect to db
     conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
 
     # clear db
     clear_db(conn)
 
-    repo_path = "test_repo"
-
     repo = get_repo(repo_path)
 
     parse_repo(repo, conn, main_branch, main_commit)
 
-    repo.reset()
-
     ranks = rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit)
 
     conn.close()
+
+    repo.reset()
+
+    return ranks
+
+def get_github_pr_reviewers(pr):
+    reviews = pr.get_reviews()
+    reviewers = []
+
+    for i in range(reviews.totalCount):
+        reviewers.append(reviews[i].user.email)
+
+    return reviewers
+
+def get_github_pr_last_commit(pr):
+    commits = pr.get_commits()
+
+    return commits[commits.totalCount - 1].sha
+
+def clone_repo(url, name):
+    repo_path = "repos/" + name
+    # if repo not already cloned
+    if not os.isdir(repo_path):
+        Repo.clone_from(url, "repos/")
+
+def handle_github_pr(g_repo, github_repo_path, pr_id):
+    g_repo = g.get_repo(github_repo_path)
+
+    # get pr
+    pr = g_repo.get_pull(pr_id)
+
+    # only do if already merged as not sure how can do it otherwise
+    if not pr.merged:
+        # error cant compare against as dont have merge commit
+        return
+
+    user = pr.user.email
+    reviewers = get_github_pr_reviewers(pr)
+
+    merge_commit = pr.merge_commit_sha
+    last_commit = get_github_pr_last_commit(pr)
+
+    if reviewers == []:
+        # no ground truth to compare against
+        return
+
+    # then do stuff
+    main_commit = merge_commit
+    pr_commit = last_commit
+
+    # clone repo if not already cloned and return pydriller repo object
+    clone_repo(g_repo.clone_url, g_repo.name)
+
+    ranks = rank_PR(repo_path, main_branch, main_commit, PR_branch, PR_commit)
+
+def main():
+    main_branch = "master"
+    main_commit = "b0dae2fedc65878ef8a124aa0f878a1de7a2fcb3" # "HEAD"
+    PR_branch = "PR"
+    PR_commit = "23f437f1656fff0fe89aa18ce94be2080fcab35d" # "HEAD"
+
+    repo_path = "test_repo"
+
+    ranks = rank_PR(repo_path, main_branch, main_commit, PR_branch, PR_commit)
+
+    print(ranks)
 
 main()
