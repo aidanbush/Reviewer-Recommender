@@ -6,6 +6,8 @@ import os
 from github import Github
 from git import Repo
 
+REPOS_DIR = "repos/"
+
 def trim_filename(filename):
     return filename[:-3]
 
@@ -379,13 +381,12 @@ def get_repo_files(repo):
     return [{"path": f, "repopath": f[path_len + 1: ], "name": os.path.basename(f[path_len + 1: ])}
             for f in repo.files()]
 
-def change_repo_branch_commit(repo, branch, commit):
-    repo.repo.git.checkout(branch)
+def change_repo_commit(repo, commit):
     repo.repo.git.checkout(commit)
+    # get branch and return
 
-def parse_repo(repo, conn, branch, commit):
-    # change to commit and branch
-    change_repo_branch_commit(repo, branch, commit)
+def parse_repo(repo, conn, commit):
+    change_repo_commit(repo, commit)
 
     files = get_repo_files(repo)
 
@@ -632,10 +633,10 @@ def combine_ranks(ranks):
 
     return sorted_ranks
 
-def rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit):
+def rank_contributors(repo, repo_path, conn, main_commit, PR_commit):
     contributors = get_contributors(conn)
 
-    change_repo_branch_commit(repo, PR_branch, PR_commit)
+    change_repo_commit(repo, PR_commit)
 
     # get changes functions and classes
     get_changes(repo, conn, main_commit, repo_path)
@@ -669,7 +670,7 @@ def clear_db(conn):
 def get_repo(repo_path):
     return pydriller.GitRepository(repo_path)
 
-def rank_PR(repo_path, main_branch, main_commit, PR_branch, PR_commit):
+def rank_PR(repo_path, main_commit, PR_commit):
     # connect to db
     conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
 
@@ -678,9 +679,9 @@ def rank_PR(repo_path, main_branch, main_commit, PR_branch, PR_commit):
 
     repo = get_repo(repo_path)
 
-    parse_repo(repo, conn, main_branch, main_commit)
+    parse_repo(repo, conn, main_commit)
 
-    ranks = rank_contributors(repo, repo_path, conn, main_branch, main_commit, PR_branch, PR_commit)
+    ranks = rank_contributors(repo, repo_path, conn, main_commit, PR_commit)
 
     conn.close()
 
@@ -703,15 +704,35 @@ def get_github_pr_last_commit(pr):
     return commits[commits.totalCount - 1].sha
 
 def clone_repo(url, name):
-    repo_path = "repos/" + name
+    repo_path = REPOS_DIR + name
     # if repo not already cloned
     if not os.isdir(repo_path):
         Repo.clone_from(url, "repos/")
 
-def handle_github_pr(g_repo, github_repo_path, pr_id):
-    g_repo = g.get_repo(github_repo_path)
+def get_github_commits(repo, pr):
+    pr_commits = pr.get_commits()
+    all_commits = repo.get_commits()
 
-    # get pr
+    pr_commit = pr_commits[pr_commits.totalCount - 1]
+
+    i = 0
+    # find first pr commit
+    while i < all_commits.totalCount:
+        if all_commits[i] == pr_commit:
+            break
+        i += 1
+
+    # find first non pr commit
+    while i < all_commits.totalCount:
+        if all_commits[i] not in pr_commits:
+            break
+        i += 1
+
+    main_commit = all_commits[i]
+
+    return main_commit.sha, pr_commit.sha
+
+def handle_github_pr(g_repo, pr_id):
     pr = g_repo.get_pull(pr_id)
 
     # only do if already merged as not sure how can do it otherwise
@@ -722,32 +743,67 @@ def handle_github_pr(g_repo, github_repo_path, pr_id):
     user = pr.user.email
     reviewers = get_github_pr_reviewers(pr)
 
-    merge_commit = pr.merge_commit_sha
-    last_commit = get_github_pr_last_commit(pr)
+    main_commit, pr_commit = get_github_commits(g_repo, pr)
 
     if reviewers == []:
         # no ground truth to compare against
         return
 
-    # then do stuff
-    main_commit = merge_commit
-    pr_commit = last_commit
-
     # clone repo if not already cloned and return pydriller repo object
     clone_repo(g_repo.clone_url, g_repo.name)
 
-    ranks = rank_PR(repo_path, main_branch, main_commit, PR_branch, PR_commit)
+    ranks = rank_PR(repo_path, main_commit, PR_commit)
+
+    return ranks, reviewers
+
+def write_results(repo_name, pr_id, recomend_ranks, correct_reviewers):
+    result_filename = REPOS_DIR + os.path.basename(repo_full_name) + str(pr_id)
+
+    f = open(result_filename)
+
+    json.dump({"recomended":recomend_ranks, "correct":correct_reviewers}, f)
+
+    f.close
+
+def test_github_repo(repo_full_name, github_access, pr_list):
+    g_repo = github_access.get_repo(repo_full_name)
+
+    for pr_id in pr_list:
+        recomend_ranks, correct_reviewers = handle_github_pr(g_repo, pr_id)
+        # write to file to analyze
+        write_results(repo_full_name, pr_id, recomend_ranks, correct_reviewers)
+
+def get_github_access():
+    f = open("access_token")
+    token = f.read().rstrip()
+    f.close()
+
+    return Github(token)
+
+def load_repo_json():
+    f = open("test_repos.json")
+    repos = json.load(f)
+    f.close()
+
+    return repos
+
+def test_github_repos():
+    github_access = get_github_access()
+
+    repos = load_repo_json()
+
+    for repo, pr_ids in repos.items():
+        test_github_repo(repo, github_access, pr_ids)
 
 def main():
-    main_branch = "master"
-    main_commit = "b0dae2fedc65878ef8a124aa0f878a1de7a2fcb3" # "HEAD"
-    PR_branch = "PR"
-    PR_commit = "23f437f1656fff0fe89aa18ce94be2080fcab35d" # "HEAD"
+    test_github_repos()
+    #main_commit = "b0dae2fedc65878ef8a124aa0f878a1de7a2fcb3" # "HEAD"
+    #PR_commit = "23f437f1656fff0fe89aa18ce94be2080fcab35d" # "HEAD"
 
-    repo_path = "test_repo"
+    #repo_path = "test_repo"
 
-    ranks = rank_PR(repo_path, main_branch, main_commit, PR_branch, PR_commit)
+    #ranks = rank_PR(repo_path, main_commit, PR_commit)
 
-    print(ranks)
+    #print(ranks)
 
 main()
