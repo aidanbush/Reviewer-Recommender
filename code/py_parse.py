@@ -5,6 +5,7 @@ import pydriller
 import os
 from github import Github
 from git import Repo
+import json
 
 REPOS_DIR = "repos/"
 
@@ -104,10 +105,24 @@ class Visitor(ast.NodeVisitor):
         if hasattr(node.func, "id"):
             func_name = node.func.id
         else:
-            func_name = node.func.attr
             a = node.func
+            count = 0
+            while not hasattr(a, "attr"):
+                if not hasattr(a, "func") or count >= 10:
+                    self.generic_visit(node)
+                    return
+                a = a.func
+                count += 1
+            func_name = a.attr
+
+            a = node.func
+            count = 0
             while(type(a) == ast.Attribute):
+                if count >= 10:
+                    self.generic_visit(node)
+                    return
                 a = a.value
+                count += 1
             if type(a) == ast.Name:
                 base = a.id
 
@@ -159,6 +174,11 @@ def process_file(filepath, repopath, filename, conn, lines, old_repopath, old_fi
     if not os.path.isfile(filepath):
         print("file", filepath, "does not exist")
         return
+
+    if not filepath.endswith(".py"):
+        return
+
+    print("processing", filepath)
 
     f = open(filepath)
 
@@ -382,6 +402,7 @@ def get_repo_files(repo):
             for f in repo.files()]
 
 def change_repo_commit(repo, commit):
+    #repo.repo.git.checkout("master")
     repo.repo.git.checkout(commit)
     # get branch and return
 
@@ -390,9 +411,13 @@ def parse_repo(repo, conn, commit):
 
     files = get_repo_files(repo)
 
+    num_files = len(files)
+
     # parse python files
     for f in files:
+        print("file", i, "out of", num_files)
         process_file(f["path"], f["repopath"], f["name"], conn, [], f["path"], f["name"])
+        i += 1
 
     handle_related_funcs(conn)
 
@@ -706,8 +731,11 @@ def get_github_pr_last_commit(pr):
 def clone_repo(url, name):
     repo_path = REPOS_DIR + name
     # if repo not already cloned
-    if not os.isdir(repo_path):
+    if not os.path.isdir(repo_path):
+        print("cloneing repo", url)
         Repo.clone_from(url, "repos/")
+
+    return repo_path
 
 def get_github_commits(repo, pr):
     pr_commits = pr.get_commits()
@@ -750,9 +778,9 @@ def handle_github_pr(g_repo, pr_id):
         return
 
     # clone repo if not already cloned and return pydriller repo object
-    clone_repo(g_repo.clone_url, g_repo.name)
+    repo_path = clone_repo(g_repo.clone_url, g_repo.name)
 
-    ranks = rank_PR(repo_path, main_commit, PR_commit)
+    ranks = rank_PR(repo_path, main_commit, pr_commit)
 
     return ranks, reviewers
 
@@ -762,14 +790,22 @@ def write_results(repo_name, pr_id, recomend_ranks, correct_reviewers):
     f = open(result_filename)
 
     json.dump({"recomended":recomend_ranks, "correct":correct_reviewers}, f)
+    print(json.dumps({"recomended":recomend_ranks, "correct":correct_reviewers}))
 
     f.close
 
 def test_github_repo(repo_full_name, github_access, pr_list):
     g_repo = github_access.get_repo(repo_full_name)
 
+    print("testing repo", repo_full_name)
+
     for pr_id in pr_list:
-        recomend_ranks, correct_reviewers = handle_github_pr(g_repo, pr_id)
+        print("testing pr", pr_id)
+        ranks = handle_github_pr(g_repo, pr_id)
+        if ranks == None:
+            print("pr", pr_id, "failed")
+            continue
+        recomend_ranks, correct_reviewers = ranks
         # write to file to analyze
         write_results(repo_full_name, pr_id, recomend_ranks, correct_reviewers)
 
@@ -781,7 +817,7 @@ def get_github_access():
     return Github(token)
 
 def load_repo_json():
-    f = open("test_repos.json")
+    f = open(REPOS_DIR + "test_repos.json")
     repos = json.load(f)
     f.close()
 
@@ -792,8 +828,8 @@ def test_github_repos():
 
     repos = load_repo_json()
 
-    for repo, pr_ids in repos.items():
-        test_github_repo(repo, github_access, pr_ids)
+    for repo in repos:
+        test_github_repo(repo["name"], github_access, repo["prs"])
 
 def main():
     test_github_repos()
