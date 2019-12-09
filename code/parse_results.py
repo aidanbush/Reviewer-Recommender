@@ -90,6 +90,9 @@ def stats_on_test(test_name):
     print(test_name, "not in recomended,", not_in_recomended)
 
 def main():
+    if not os.path.exists(DIR):
+        os.makedirs(DIR)
+
     stats_on_test("all")
     stats_on_test("modified")
     stats_on_test("related")
