@@ -18,6 +18,6 @@ In the code directory the main project code is stored, the files include:
 
 ## Running the artifact
 
-To run the artifact simply call the run.sh bash script.
+To run the artifact you must first create a github access token (https://github.com/settings/tokens) and store it in a file named `access_token` in the `code/` directory. And then simply call the run.sh bash script from within the `code` directory.
 
 It may take over an hour to run to completion.
