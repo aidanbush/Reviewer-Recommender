@@ -739,7 +739,7 @@ def get_repo(repo_path):
 
 def rank_PR(repo_path, main_commit, PR_commit):
     # connect to db
-    conn = pg8000.connect(user="postgres", password="pass", database="review_recomender")
+    conn = pg8000.connect(user="postgres", password="pass", database="review_recomender", host="review-psql")
 
     # clear db
     clear_db(conn)
@@ -893,7 +893,7 @@ def test_github_repos(test_name):
         test_github_repo(repo["name"], repo["prs"], test_name)
 
 def main():
-    #test_github_repos("all")
+    test_github_repos("all")
 
     metrics_in_use = [MODIFIED_STR]
     test_github_repos(MODIFIED_STR)
