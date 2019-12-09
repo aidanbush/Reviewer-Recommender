@@ -8,6 +8,13 @@ from git import Repo
 import json
 
 REPOS_DIR = "repos/"
+RESULT_DIR = "res/"
+
+MODIFIED_STR = "modified"
+RELATED_STR = "related"
+API_STR = "api"
+
+metrics_in_use = [MODIFIED_STR, RELATED_STR, API_STR]
 
 def trim_filename(filename):
     return filename[:-3]
@@ -38,7 +45,6 @@ class Visitor(ast.NodeVisitor):
         return False
 
     def clean_import_names(self, name):
-        # Threat to validity in how I handle imports
         return name.split(".")[-1]
 
     def add_import_mapping(self, asname, name):
@@ -226,8 +232,6 @@ def handle_related_funcs(conn):
         # Threat to validity dont properly check which file the functions are apart of if both files have the same name and func name
         # Threat to validity dont handle functions that are part of a class differenty from a class
 
-        # TODO also check if in class
-
         # find func it is in
         callers = find_inner_func(conn, res["filename"], res["start_line"], res["end_line"])
 
@@ -246,8 +250,14 @@ def handle_related_funcs(conn):
                     c.close()
 
 def get_author_file_ownership(file_obj, branch, repo):
-    # blame file
-    lines = repo.repo.blame(branch, file_obj["repopath"])
+    # check if file exists
+    if not os.path.isfile(file_obj["path"]):
+        return {}
+    # blame file if blame fails the file is not in the commit
+    try:
+        lines = repo.repo.blame(branch, file_obj["repopath"])
+    except:
+        return {}
 
     author_lines = {}
     cur_line = 1
@@ -384,6 +394,8 @@ def assign_file_api_ownership(file_obj, conn, author_lines):
 
 def assign_ownership(file_obj, branch, repo, conn):
     author_lines = get_author_file_ownership(file_obj, branch, repo)
+    if author_lines == {}:
+        return
     # done so we can use it later
     insert_author_lines(file_obj["repopath"], author_lines, conn)
 
@@ -414,16 +426,22 @@ def parse_repo(repo, conn, commit):
     num_files = len(files)
 
     # parse python files
+    i = 1
     for f in files:
         print("file", i, "out of", num_files)
         process_file(f["path"], f["repopath"], f["name"], conn, [], f["path"], f["name"])
         i += 1
 
+    print("handling related functions")
     handle_related_funcs(conn)
 
     # assign ownership
+    print("assigning file ownership")
+    i = 1
     for f in files:
+        print("file", i, "of", num_files, f)
         assign_ownership(f, 'master', repo, conn)
+        i += 1
 
 def get_contributors(conn):
     c = conn.cursor()
@@ -432,6 +450,17 @@ def get_contributors(conn):
     c.close()
 
     return results
+
+def get_change_lines(line):
+    split_line = line.split(' ')[2].split(',')
+
+    start_lineno = int(split_line[0][1:])
+    if (len(split_line) > 1):
+        end_lineno = start_lineno + int(split_line[1])
+    else:
+        end_lineno = start_lineno
+
+    return start_lineno, end_lineno
 
 def get_changes(repo, conn, diff_commit, repo_path):
     # go to PR commit
@@ -457,16 +486,17 @@ def get_changes(repo, conn, diff_commit, repo_path):
         elif l.startswith("@@"):
             # search for @@ modified lines and add to list
             # second set of ranges
-            start_lineno = int(l.split(' ')[2].split(',')[0][1:])
-            end_lineno = start_lineno + int(l.split(' ')[2].split(',')[1])
+            start_lineno, end_lineno = get_change_lines(l)
             files[(path_name, base_name, old_path, old_base)].append((start_lineno, end_lineno))
 
     # parse files
+    print("parsing changed files")
     for name, lines in files.items():
         filepath = name[0]
         filename = name[1]
         old_filepath = name[2]
         old_filename = name[3]
+        print("parsing file", old_filepath)
 
         if old_filepath == '' or old_filename == '':
             continue
@@ -664,8 +694,10 @@ def rank_contributors(repo, repo_path, conn, main_commit, PR_commit):
     change_repo_commit(repo, PR_commit)
 
     # get changes functions and classes
+    print("getting changes from PR")
     get_changes(repo, conn, main_commit, repo_path)
 
+    print("calculating ranks")
     # rank
     # modified code rank
     modified_scores = modified_code_rank(conn)
@@ -675,11 +707,21 @@ def rank_contributors(repo, repo_path, conn, main_commit, PR_commit):
     api_scores = api_usage_rank(conn)
 
     # rank
-    modified_ranks = get_ranks(modified_scores)
-    related_ranks = get_ranks(related_scores)
-    api_ranks = get_ranks(api_scores)
+    ranks = []
 
-    return combine_ranks([modified_ranks, related_ranks, api_ranks])
+    if MODIFIED_STR in metrics_in_use:
+        modified_ranks = get_ranks(modified_scores)
+        ranks.append(modified_ranks)
+
+    if RELATED_STR in metrics_in_use:
+        related_ranks = get_ranks(related_scores)
+        ranks.append(related_ranks)
+
+    if API_STR in metrics_in_use:
+        api_ranks = get_ranks(api_scores)
+        ranks.append(api_ranks)
+
+    return combine_ranks(ranks)
 
 def clear_db(conn):
     tables = ["related_funcs", "api_ownership", "file_ownership", "class_ownership", "func_ownership",
@@ -704,6 +746,7 @@ def rank_PR(repo_path, main_commit, PR_commit):
 
     repo = get_repo(repo_path)
 
+    print("parsing main repo")
     parse_repo(repo, conn, main_commit)
 
     ranks = rank_contributors(repo, repo_path, conn, main_commit, PR_commit)
@@ -732,8 +775,8 @@ def clone_repo(url, name):
     repo_path = REPOS_DIR + name
     # if repo not already cloned
     if not os.path.isdir(repo_path):
-        print("cloneing repo", url)
-        Repo.clone_from(url, "repos/")
+        print("cloning repo", url)
+        Repo.clone_from(url, repo_path)
 
     return repo_path
 
@@ -756,6 +799,9 @@ def get_github_commits(repo, pr):
             break
         i += 1
 
+    if i >= all_commits.totalCount:
+        return None
+
     main_commit = all_commits[i]
 
     return main_commit.sha, pr_commit.sha
@@ -766,55 +812,72 @@ def handle_github_pr(g_repo, pr_id):
     # only do if already merged as not sure how can do it otherwise
     if not pr.merged:
         # error cant compare against as dont have merge commit
+        print("PR not merged", pr_id)
         return
 
     user = pr.user.email
     reviewers = get_github_pr_reviewers(pr)
 
-    main_commit, pr_commit = get_github_commits(g_repo, pr)
+    commits = get_github_commits(g_repo, pr)
+    if commits == None:
+        print("Issue finding commits", pr_id)
+        return
+
+    main_commit, pr_commit = commits
 
     if reviewers == []:
         # no ground truth to compare against
+        print("no original reviewers found", pr_id)
         return
 
     # clone repo if not already cloned and return pydriller repo object
     repo_path = clone_repo(g_repo.clone_url, g_repo.name)
 
+    print("ranking PR", pr_commit)
     ranks = rank_PR(repo_path, main_commit, pr_commit)
 
     return ranks, reviewers
 
-def write_results(repo_name, pr_id, recomend_ranks, correct_reviewers):
-    result_filename = REPOS_DIR + os.path.basename(repo_full_name) + str(pr_id)
+def write_results(repo_name, pr_id, recomend_ranks, correct_reviewers, test_name):
+    result_filename = RESULT_DIR + test_name + "_" + os.path.basename(repo_name) + str(pr_id)
 
-    f = open(result_filename)
+    # if results dir does not exist create it
+    if not os.path.isdir(RESULT_DIR):
+        os.mkdir(RESULT_DIR)
+
+    f = open(result_filename, "w")
 
     json.dump({"recomended":recomend_ranks, "correct":correct_reviewers}, f)
     print(json.dumps({"recomended":recomend_ranks, "correct":correct_reviewers}))
 
     f.close
 
-def test_github_repo(repo_full_name, github_access, pr_list):
+def test_github_repo(repo_full_name, pr_list, test_name):
+    github_access = get_github_access()
+
     g_repo = github_access.get_repo(repo_full_name)
 
     print("testing repo", repo_full_name)
 
-    for pr_id in pr_list:
+    for pr_data in pr_list:
+        github_access = get_github_access()
+        pr_id = pr_data[0]
         print("testing pr", pr_id)
         ranks = handle_github_pr(g_repo, pr_id)
         if ranks == None:
             print("pr", pr_id, "failed")
             continue
-        recomend_ranks, correct_reviewers = ranks
+        correct_reviewers = pr_data[1:]
+        recomend_ranks, _ = ranks
         # write to file to analyze
-        write_results(repo_full_name, pr_id, recomend_ranks, correct_reviewers)
+        write_results(repo_full_name, pr_id, recomend_ranks, correct_reviewers, test_name)
 
 def get_github_access():
     f = open("access_token")
     token = f.read().rstrip()
     f.close()
 
-    return Github(token)
+    return Github(token, timeout=60)
 
 def load_repo_json():
     f = open(REPOS_DIR + "test_repos.json")
@@ -823,16 +886,24 @@ def load_repo_json():
 
     return repos
 
-def test_github_repos():
-    github_access = get_github_access()
-
+def test_github_repos(test_name):
     repos = load_repo_json()
 
     for repo in repos:
-        test_github_repo(repo["name"], github_access, repo["prs"])
+        test_github_repo(repo["name"], repo["prs"], test_name)
 
 def main():
-    test_github_repos()
+    #test_github_repos("all")
+
+    metrics_in_use = [MODIFIED_STR]
+    test_github_repos(MODIFIED_STR)
+
+    metrics_in_use = [RELATED_STR]
+    test_github_repos(RELATED_STR)
+
+    metrics_in_use = [API_STR]
+    test_github_repos(API_STR)
+
     #main_commit = "b0dae2fedc65878ef8a124aa0f878a1de7a2fcb3" # "HEAD"
     #PR_commit = "23f437f1656fff0fe89aa18ce94be2080fcab35d" # "HEAD"
 
