@@ -18,6 +18,10 @@ In the code directory the main project code is stored, the files include:
 
 ## Running the artifact
 
-To run the artifact you must first create a github access token (https://github.com/settings/tokens) and store it in a file named `access_token` in the `code/` directory. And then simply call the run.sh bash script from within the `code` directory.
+To run the artifact you must first create a github access token (https://github.com/settings/tokens) and store it in a file named `access_token` in the `code/` directory.
+The token must have the following permissions: public_repo, read:packages, read:user, repo:status, user:email.
+And then simply call the run.sh bash script from within the `code` directory.
+
+Two docker containers will be created `review_app`, `review-psql`, and a single docker network `review-net`.
 
 It may take over an hour to run to completion.
